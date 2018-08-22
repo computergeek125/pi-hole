@@ -463,7 +463,7 @@ find_IPv4_information() {
     # Get just the IP address
     IPv4bare=$(awk '{print $7}' <<< "${route}")
     # Append the CIDR notation to the IP address
-    IPV4_ADDRESS=$(ip -o -f inet addr show | grep "${IPv4bare}" |  awk '{print $4}' | awk 'END {print}')
+    IPV4_ADDRESS=$(ip -o -f inet addr show | grep "${IPv4bare}/" |  awk '{print $4}' | awk 'END {print}')
     # Get the default gateway (the way to reach the Internet)
     IPv4gw=$(awk '{print $3}' <<< "${route}")
 }
