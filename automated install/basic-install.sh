@@ -237,27 +237,27 @@ elif command -v rpm &> /dev/null; then
     UPDATE_PKG_CACHE=":"
     PKG_INSTALL=(${PKG_MANAGER} install -y)
     PKG_COUNT="${PKG_MANAGER} check-update | egrep '(.i686|.x86|.noarch|.arm|.src)' | wc -l"
-    INSTALLER_DEPS=(dialog git iproute net-tools newt procps-ng which)
+    INSTALLER_DEPS=(dialog git iproute newt procps-ng which)
     PIHOLE_DEPS=(bc bind-utils cronie curl findutils nmap-ncat sudo unzip wget libidn2 psmisc)
     PIHOLE_WEB_DEPS=(lighttpd lighttpd-fastcgi php-common php-cli php-pdo)
     LIGHTTPD_USER="lighttpd"
     LIGHTTPD_GROUP="lighttpd"
     LIGHTTPD_CFG="lighttpd.conf.fedora"
     # If the host OS is Fedora,
-    if grep -qi 'fedora' /etc/redhat-release; then
+    if grep -qiE 'fedora|fedberry' /etc/redhat-release; then
         # all required packages should be available by default with the latest fedora release
         # ensure 'php-json' is installed on Fedora (installed as dependency on CentOS7 + Remi repository)
         PIHOLE_WEB_DEPS+=('php-json')
     # or if host OS is CentOS,
-    elif grep -qi 'centos' /etc/redhat-release; then
+    elif grep -qiE 'centos|scientific' /etc/redhat-release; then
         # Pi-Hole currently supports CentOS 7+ with PHP7+
         SUPPORTED_CENTOS_VERSION=7
         SUPPORTED_CENTOS_PHP_VERSION=7
         # Check current CentOS major release version
-        CURRENT_CENTOS_VERSION=$(rpm -q --queryformat '%{VERSION}' centos-release)
+        CURRENT_CENTOS_VERSION=$(grep -oP '(?<= )[0-9]+(?=\.)' /etc/redhat-release)
         # Check if CentOS version is supported
         if [[ $CURRENT_CENTOS_VERSION -lt $SUPPORTED_CENTOS_VERSION ]]; then
-            echo -e "  ${CROSS} CentOS $CURRENT_CENTOS_VERSION is not suported."
+            echo -e "  ${CROSS} CentOS $CURRENT_CENTOS_VERSION is not supported."
             echo -e "      Please update to CentOS release $SUPPORTED_CENTOS_VERSION or later"
             # exit the installer
             exit
@@ -305,13 +305,16 @@ elif command -v rpm &> /dev/null; then
         fi
     fi
     else
-        # If not a supported version of Fedora or CentOS,
-        echo -e "  ${CROSS} Unsupported RPM based distribution"
-        # exit the installer
-        exit
+        # Warn user of unsupported version of Fedora or CentOS
+        if ! whiptail --defaultno --title "Unsupported RPM based distribution" --yesno "Would you like to continue installation on an unsupported RPM based distribution?\\n\\nPlease ensure the following packages have been installed manually:\\n\\n- lighttpd\\n- lighttpd-fastcgi\\n- PHP version 7+" ${r} ${c}; then
+            echo -e "  ${CROSS} Aborting installation due to unsupported RPM based distribution"
+            exit # exit the installer
+        else
+            echo -e "  ${INFO} Continuing installation with unsupported RPM based distribution"
+        fi
     fi
 
-# If neither apt-get or rmp/dnf are found
+# If neither apt-get or yum/dnf package managers were found
 else
     # it's not an OS we can support,
     echo -e "  ${CROSS} OS distribution not supported"
@@ -858,7 +861,6 @@ setDNS() {
     DNSChooseOptions=(Google ""
         OpenDNS ""
         Level3 ""
-        Norton ""
         Comodo ""
         DNSWatch ""
         Quad9 ""
@@ -889,11 +891,6 @@ setDNS() {
             echo "Level3 servers"
             PIHOLE_DNS_1="4.2.2.1"
             PIHOLE_DNS_2="4.2.2.2"
-            ;;
-        Norton)
-            echo "Norton ConnectSafe servers"
-            PIHOLE_DNS_1="199.85.126.10"
-            PIHOLE_DNS_2="199.85.127.10"
             ;;
         Comodo)
             echo "Comodo Secure servers"
@@ -1092,7 +1089,7 @@ chooseBlocklists() {
 }
 
 # Accept a string parameter, it must be one of the default lists
-# This function allow to not duplicate code in chooseBlocklists and 
+# This function allow to not duplicate code in chooseBlocklists and
 # in installDefaultBlocklists
 appendToListsFile() {
     case $1 in
@@ -1113,7 +1110,7 @@ installDefaultBlocklists() {
     # If this file exists, we avoid overriding it.
     if [[ -f "${adlistFile}" ]]; then
         return;
-    fi  
+    fi
     appendToListsFile StevenBlack
     appendToListsFile MalwareDom
     appendToListsFile Cameleon
@@ -1262,7 +1259,7 @@ installConfigs() {
     version_check_dnsmasq
     # Install empty file if it does not exist
     if [[ ! -f "${PI_HOLE_CONFIG_DIR}/pihole-FTL.conf" ]]; then
-        if ! install -o pihole -g pihole -m 664 /dev/null "${PI_HOLE_CONFIG_DIR}/pihole-FTL.conf" &>/dev/nul; then
+        if ! install -o pihole -g pihole -m 664 /dev/null "${PI_HOLE_CONFIG_DIR}/pihole-FTL.conf" &>/dev/null; then
             echo -e "  ${COL_LIGHT_RED}Error: Unable to initialize configuration file ${PI_HOLE_CONFIG_DIR}/pihole-FTL.conf"
             return 1
         fi
@@ -1287,6 +1284,8 @@ installConfigs() {
         fi
         # and copy in the config file Pi-hole needs
         cp ${PI_HOLE_LOCAL_REPO}/advanced/${LIGHTTPD_CFG} /etc/lighttpd/lighttpd.conf
+        # Make sure the external.conf file exists, as lighttpd v1.4.50 crashes without it
+        touch /etc/lighttpd/external.conf
         # if there is a custom block page in the html/pihole directory, replace 404 handler in lighttpd config
         if [[ -f "/var/www/html/pihole/custom.php" ]]; then
             sed -i 's/^\(server\.error-handler-404\s*=\s*\).*$/\1"pihole\/custom\.php"/' /etc/lighttpd/lighttpd.conf
@@ -1634,15 +1633,18 @@ create_pihole_user() {
     # If the user pihole exists,
     if id -u pihole &> /dev/null; then
         # just show a success
-        echo -ne "${OVER}  ${TICK} ${str}"
+        echo -e "${OVER}  ${TICK} ${str}"
     # Otherwise,
     else
         echo -ne "${OVER}  ${CROSS} ${str}"
         local str="Creating user 'pihole'"
-        echo -ne "  ${INFO} ${str}..."
+        echo -ne "${OVER}  ${INFO} ${str}..."
         # create her with the useradd command
-        useradd -r -s /usr/sbin/nologin pihole
-        echo -ne "${OVER}  ${TICK} ${str}"
+        if useradd -r -s /usr/sbin/nologin pihole; then
+          echo -e "${OVER}  ${TICK} ${str}"
+        else
+          echo -e "${OVER}  ${CROSS} ${str}"
+        fi
     fi
 }
 
@@ -2109,12 +2111,15 @@ FTLinstall() {
                 fi
             fi
 
-            #ensure /etc/dnsmasq.conf contains `conf-dir=/etc/dnsmasq.d`
-            confdir="conf-dir=/etc/dnsmasq.d"
-            conffile="/etc/dnsmasq.conf"
-            if ! grep -q "$confdir" "$conffile"; then
-                echo "$confdir" >> "$conffile"
+            # Backup existing /etc/dnsmasq.conf if present and ensure that
+            # /etc/dnsmasq.conf contains only "conf-dir=/etc/dnsmasq.d"
+            local conffile="/etc/dnsmasq.conf"
+            if [[ -f "${conffile}" ]]; then
+                echo "  ${INFO} Backing up ${conffile} to ${conffile}.old"
+                mv "${conffile}" "${conffile}.old"
             fi
+            # Create /etc/dnsmasq.conf
+            echo "conf-dir=/etc/dnsmasq.d" > "${conffile}"
 
             return 0
         # Otherwise,
@@ -2483,7 +2488,7 @@ main() {
     echo -e "  ${INFO} Restarting services..."
     # Start services
 
-    # Enable FTL 
+    # Enable FTL
     # Ensure the service is enabled before trying to start it
     # Fixes a problem reported on Ubuntu 18.04 where trying to start
     # the service before enabling causes installer to exit
